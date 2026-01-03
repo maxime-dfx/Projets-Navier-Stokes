@@ -1,0 +1,44 @@
+[space]
+xmin = 0.0
+xmax = 1.0
+ymin = 0.0
+ymax = 1.0
+hx = 0.05    # Sera ignoré/écrasé par la boucle de convergence
+hy = 0.05    # Idem
+
+[time]
+t0 = 0.0
+tfinal = 5.0 # Temps suffisant pour que l'erreur L2 se stabilise
+dt = 0.01    # Sera recalculé automatiquement via la CFL
+scheme = "ExplicitEuler"
+
+[physics]
+rho = 1.0
+nu = 1.0     # Viscosité pour le test (Re=1 pour Poiseuille est très stable)
+
+[obstacle]
+cx = -1.0    # Hors domaine
+cy = 0.5
+radius = 0.1
+
+[boundary]
+left = "Dirichlet"
+left_val = 1.0
+inlet_profile = "Poiseuille" # Important pour la comparaison analytique
+right = "Neumann"
+right_val = 0.0
+bottom = "Dirichlet"
+bottom_val = 0.0
+top = "Dirichlet"
+top_val = 0.0
+
+[output]
+results = "results/Convergence"
+name = "Convergence_Study"
+
+[convergence]
+schemes = ["ExplicitEuler", "RungeKutta2", "RungeKutta4"] 
+resolutions = [10, 20, 40]
+L = 1.0
+CFL = 0.2 
+nu = 1.0

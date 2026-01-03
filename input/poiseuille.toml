@@ -1,0 +1,38 @@
+[space]
+xmin = 0.0
+xmax = 2.0
+ymin = 0.0
+ymax = 1.0
+hx = 0.02
+hy = 0.02
+
+[time]
+t0 = 0.0
+tfinal = 5.0
+# CORRECTION : dt doit être < 0.001. On prend 0.0005 par sécurité.
+dt = 0.0005
+scheme = "RK4"
+
+[physics]
+rho = 1.0
+nu = 0.1      # Viscosité ÉLEVÉE (Re ~ 10)
+
+[obstacle]
+cx = -1.0     # HORS DU DOMAINE
+cy = 0.5
+radius = 0.1
+
+[boundary]
+left = "Dirichlet"
+left_val = 1.0
+inlet_profile = "Poiseuille"
+right = "Neumann"
+right_val = 0.0
+bottom = "Dirichlet"
+bottom_val = 0.0 
+top = "Dirichlet"
+top_val = 0.0
+
+[output]
+results = "results/Poiseuille"
+name = "Validation_Poiseuille_Re10"
