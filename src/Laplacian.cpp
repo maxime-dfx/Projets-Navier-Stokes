@@ -1,115 +1,131 @@
+// ====================================================================================
+//                                 LAPLACIAN.CPP
+// ====================================================================================
+// Implémentation du solveur de Poisson.
+// CORRECTION : Redimensionnement explicite des vecteurs gradients pour éviter le crash.
+// ====================================================================================
+
 #include "Laplacian.h"
+#include "Function.h"
+#include "DataFile.h"
+#include "MACgrid.h"
+
 #include <iostream>
 #include <vector>
+#include <cmath>
 
-using namespace std;
-using namespace Eigen;
-
-Laplacian::Laplacian(Function* function, DataFile* data_file, MACgrid* grid) :
-    _fct(function), _df(data_file), _grid(grid)
+// ============================================================================
+// CONSTRUCTEUR
+// ============================================================================
+Laplacian::Laplacian(Function* fct, DataFile* df, MACgrid* grid)
+    : _fct(fct), _df(df), _grid(grid) 
 {
-    int Nx = _df->Get_Nx();
-    int Ny = _df->Get_Ny();
-    
-    // Prédimensionnement de la matrice
-    _H.resize(Nx * Ny, Nx * Ny);
+    // Pré-dimensionnement pour éviter les réallocations dynamiques
+    int N = _df->Get_Nx() * _df->Get_Ny();
+    _H.resize(N, N);
 }
 
-void Laplacian::BuildMatrix()
+// ============================================================================
+// CONSTRUCTION DE LA MATRICE (BUILD MATRIX)
+// ============================================================================
+void Laplacian::BuildMatrix() 
 {
+    std::cout << ">> [Laplacian] Construction de la matrice..." << std::endl;
+
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
     double hx = _df->Get_hx();
     double hy = _df->Get_hy();
-    
-    // Coefficients de discrétisation 1/h^2
+
+    // Coefficients de discrétisation FD (1/h^2)
     double Cx = 1.0 / (hx * hx);
     double Cy = 1.0 / (hy * hy);
 
-    // Utilisation de liste de triplets pour une construction efficace
+    // Liste de triplets pour l'insertion efficace dans Eigen::SparseMatrix
     std::vector<Eigen::Triplet<double>> triplets;
-    triplets.reserve(5 * Nx * Ny); // Estimation : 5 coefficients par ligne (stencil à 5 points)
+    triplets.reserve(5 * Nx * Ny); 
 
     for (int i = 0; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
-            int k = _grid->GetPIndex(i, j); // Index global courant
-            double diag = 0.0; // Valeur de la diagonale
+            int k = _grid->GetPIndex(i, j); // Index global (Ligne de la matrice)
+            double diag = 0.0; 
 
-            // --- Voisins en X (Ouest / Est) ---
-            if (j > 0) { // Voisin Gauche
+            // --- VOISIN OUEST (j-1) ---
+            if (j > 0) { 
                 int k_W = _grid->GetPIndex(i, j - 1);
-                triplets.push_back(Eigen::Triplet<double>(k, k_W, -Cx));
+                triplets.emplace_back(k, k_W, -Cx);
                 diag += Cx;
             } 
-            // else: Bord Gauche -> Neumann (dP/dn = 0) => pas de flux sortant
+            // else: Bord Ouest -> Neumann homogène (dP/dn = 0) => Flux nul
 
-            if (j < Nx - 1) { // Voisin Droite
+            // --- VOISIN EST (j+1) ---
+            if (j < Nx - 1) { 
                 int k_E = _grid->GetPIndex(i, j + 1);
-                triplets.push_back(Eigen::Triplet<double>(k, k_E, -Cx));
+                triplets.emplace_back(k, k_E, -Cx);
                 diag += Cx;
             }
-            // else: Bord Droite -> Neumann
 
-            // --- Voisins en Y (Sud / Nord) ---
-            if (i > 0) { // Voisin Bas
+            // --- VOISIN SUD (i-1) ---
+            if (i > 0) { 
                 int k_S = _grid->GetPIndex(i - 1, j);
-                triplets.push_back(Eigen::Triplet<double>(k, k_S, -Cy));
-                diag += Cy;
-            } 
-            // else: Bord Bas -> Neumann
-
-            if (i < Ny - 1) { // Voisin Haut
-                int k_N = _grid->GetPIndex(i + 1, j);
-                triplets.push_back(Eigen::Triplet<double>(k, k_N, -Cy));
+                triplets.emplace_back(k, k_S, -Cy);
                 diag += Cy;
             }
-            // else: Bord Haut -> Neumann
 
-            // Remplissage de la diagonale
-            // Note : Pour Neumann pur, la somme des coefs d'une ligne est nulle.
-            triplets.push_back(Eigen::Triplet<double>(k, k, diag));
+            // --- VOISIN NORD (i+1) ---
+            if (i < Ny - 1) { 
+                int k_N = _grid->GetPIndex(i + 1, j);
+                triplets.emplace_back(k, k_N, -Cy);
+                diag += Cy;
+            }
+
+            // --- DIAGONALE ---
+            triplets.emplace_back(k, k, diag);
         }
     }
-    
-    // --- Fixation du mode hydrostatique ---
-    // Avec des CL Neumann partout, la matrice est singulière (infinité de solutions à une constante près).
-    // On impose arbitrairement P(0,0) = 0 en pénalisant fortement la diagonale du premier élément.
-    int k_ref = _grid->GetPIndex(0, 0);
-    triplets.push_back(Eigen::Triplet<double>(k_ref, k_ref, 1.0e9)); 
 
-    // Assemblage final et factorisation
+    // --- GESTION DE LA SINGULARITÉ (Fixation du mode constant) ---
+    int k_ref = _grid->GetPIndex(0, 0);
+    triplets.emplace_back(k_ref, k_ref, 1.0e9);
+
+    // Assemblage final
     _H.setFromTriplets(triplets.begin(), triplets.end());
+
+    // Factorisation (LLT)
     _solver.compute(_H);
-    
-    if(_solver.info() != Eigen::Success) {
-        cerr << "Erreur: Factorisation de Cholesky a échoué." << endl;
-        exit(1);
+
+    if (_solver.info() != Eigen::Success) {
+        std::cerr << "ERREUR CRITIQUE : Échec de la factorisation Cholesky !" << std::endl;
+        exit(EXIT_FAILURE);
     }
 }
 
-Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V)
+// ============================================================================
+// CALCUL DE LA DIVERGENCE (COMPUTE DIVERGENCE)
+// ============================================================================
+Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V) 
 {
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
-    double hx = _df->Get_hx();
-    double hy = _df->Get_hy();
+    double inv_hx = 1.0 / _df->Get_hx();
+    double inv_hy = 1.0 / _df->Get_hy();
 
     Eigen::VectorXd div(Nx * Ny);
-    
-    // Parcours des cellules de pression
+
+    // Parcours de toutes les cellules de pression
     for (int i = 0; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
             int k = _grid->GetPIndex(i, j);
 
-            // Indices des vitesses aux faces entourant la cellule (i,j)
-            int k_u_E = _grid->GetUIndex(i, j + 1); // Est
-            int k_u_W = _grid->GetUIndex(i, j);     // Ouest
-            int k_v_N = _grid->GetVIndex(i + 1, j); // Nord
-            int k_v_S = _grid->GetVIndex(i, j);     // Sud
+            // Récupération des indices de faces (Staggered Grid)
+            int k_u_E = _grid->GetUIndex(i, j + 1);
+            int k_u_W = _grid->GetUIndex(i, j);
+            int k_v_N = _grid->GetVIndex(i + 1, j);
+            int k_v_S = _grid->GetVIndex(i, j);
 
-            // Divergence discrète : (du/dx + dv/dy)
-            double du_dx = (U(k_u_E) - U(k_u_W)) / hx;
-            double dv_dy = (V(k_v_N) - V(k_v_S)) / hy;
+            // Calcul Divergence discrète : (du/dx + dv/dy)
+            double du_dx = (U(k_u_E) - U(k_u_W)) * inv_hx;
+            double dv_dy = (V(k_v_N) - V(k_v_S)) * inv_hy;
 
             div(k) = du_dx + dv_dy;
         }
@@ -117,53 +133,64 @@ Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eig
     return div;
 }
 
-void Laplacian::Solve(const Eigen::VectorXd& rhs, Eigen::VectorXd& p_sol)
+// ============================================================================
+// RÉSOLUTION DU SYSTÈME (SOLVE)
+// ============================================================================
+void Laplacian::Solve(const Eigen::VectorXd& rhs_in, Eigen::VectorXd& p_sol) 
 {
-    // Résolution du système : H * P = -RHS
-    // (Le signe moins vient de l'équation de projection : Lap(P) = div(U*) / dt)
-    // Ici on suppose que 'rhs' contient div(U*)/dt.
-    
-    p_sol = _solver.solve(-rhs);
-    
-    if(_solver.info() != Eigen::Success) {
-        cerr << "Erreur: Résolution du système linéaire a échoué." << endl;
+    // L'équation de projection est : Lap(P) = (rho/dt) * div(u*)
+    Eigen::VectorXd rhs = -rhs_in; 
+
+    // CONDITION DE FREDHOLM (Solvabilité pour Neumann)
+    double mean_val = rhs.mean();
+    rhs.array() -= mean_val;
+
+    // Résolution
+    p_sol = _solver.solve(rhs);
+
+    // Centrage de la pression
+    double p_mean = p_sol.mean();
+    p_sol.array() -= p_mean;
+
+    if (_solver.info() != Eigen::Success) {
+        std::cerr << "ERREUR : Le solveur linéaire a échoué à converger." << std::endl;
     }
 }
 
-void Laplacian::ComputeGradient(const Eigen::VectorXd& p, Eigen::VectorXd& gradPx, Eigen::VectorXd& gradPy)
+// ============================================================================
+// CALCUL DU GRADIENT (COMPUTE GRADIENT)
+// ============================================================================
+void Laplacian::ComputeGradient(const Eigen::VectorXd& p, Eigen::VectorXd& gradPx, Eigen::VectorXd& gradPy) 
 {
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
-    double hx = _df->Get_hx();
-    double hy = _df->Get_hy();
+    double inv_hx = 1.0 / _df->Get_hx();
+    double inv_hy = 1.0 / _df->Get_hy();
 
-    // Redimensionnement
-    gradPx.resize((Nx + 1) * Ny);
-    gradPy.resize(Nx * (Ny + 1));
-    gradPx.setZero();
-    gradPy.setZero();
+    // On redimensionne les vecteurs avant de les remplir !
+    // Sinon, l'accès par () cause un crash "Assertion failed".
+    gradPx.setZero(_grid->GetU().size());
+    gradPy.setZero(_grid->GetV().size());
 
-    // 1. Gradient X (défini aux faces U)
-    // On ignore les faces de bord (j=0 et j=Nx) car on y impose souvent Dirichlet pour U
+    // --- GRADIENT X (Défini sur les faces U verticales) ---
     for (int i = 0; i < Ny; ++i) {
         for (int j = 1; j < Nx; ++j) {
-            int k_u = _grid->GetUIndex(i, j);
-            int k_p_E = _grid->GetPIndex(i, j);     // Pression à droite
-            int k_p_W = _grid->GetPIndex(i, j - 1); // Pression à gauche
-
-            gradPx(k_u) = (p(k_p_E) - p(k_p_W)) / hx;
+            int k_u   = _grid->GetUIndex(i, j);
+            int k_p_E = _grid->GetPIndex(i, j);     // Cellule Droite
+            int k_p_W = _grid->GetPIndex(i, j - 1); // Cellule Gauche
+            
+            gradPx(k_u) = (p(k_p_E) - p(k_p_W)) * inv_hx;
         }
     }
 
-    // 2. Gradient Y (défini aux faces V)
-    // On ignore les faces de bord (i=0 et i=Ny)
+    // --- GRADIENT Y (Défini sur les faces V horizontales) ---
     for (int i = 1; i < Ny; ++i) {
         for (int j = 0; j < Nx; ++j) {
-            int k_v = _grid->GetVIndex(i, j);
-            int k_p_N = _grid->GetPIndex(i, j);     // Pression en haut
-            int k_p_S = _grid->GetPIndex(i - 1, j); // Pression en bas
+            int k_v   = _grid->GetVIndex(i, j);
+            int k_p_N = _grid->GetPIndex(i, j);     // Cellule Haut
+            int k_p_S = _grid->GetPIndex(i - 1, j); // Cellule Bas
 
-            gradPy(k_v) = (p(k_p_N) - p(k_p_S)) / hy;
+            gradPy(k_v) = (p(k_p_N) - p(k_p_S)) * inv_hy;
         }
     }
 }

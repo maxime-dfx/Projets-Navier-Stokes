@@ -1,36 +1,33 @@
+// ====================================================================================
+//                                  VTKWRITER.H
+// ====================================================================================
+// Description : Export des résultats au format VTK (Legacy ASCII).
+//               Calcule automatiquement la Vorticité pour l'analyse des tourbillons.
+// ====================================================================================
+
 #ifndef _VTK_WRITER_H_
 #define _VTK_WRITER_H_
 
-#include "DataFile.h"
-#include "MACgrid.h"
 #include <string>
 
-/**
- * @class VTKWriter
- * @brief Classe responsable de l'export des résultats au format VTK (Paraview).
- * Gère la création automatique de l'arborescence de fichiers.
- */
+// Forward declarations
+class DataFile;
+class MACgrid;
+
 class VTKWriter {
 private:
     DataFile* _df;
     MACgrid* _grid;
     std::string _sim_name;
+    std::string _output_dir;
 
 public:
-    /**
-     * @brief Constructeur
-     * @param df Pointeur vers les paramètres de simulation
-     * @param grid Pointeur vers le maillage (contient U, V, P)
-     * @param sim_name Nom spécifique de la simulation (pour le sous-dossier)
-     */
     VTKWriter(DataFile* df, MACgrid* grid, std::string sim_name);
+    ~VTKWriter() = default;
 
-    /**
-     * @brief Écrit un fichier .vtk pour l'itération courante.
-     * @param iteration Numéro de l'itération (pour le nom de fichier)
-     * @param t Temps physique actuel (pour info, pas utilisé par VTK Legacy)
-     */
+    // Écrit le fichier .vtk pour l'itération donnée
+    // Champs : Pression (Scalaire), Vitesse (Vecteur), Vorticité (Scalaire)
     void Write(int iteration, double t);
 };
 
-#endif
+#endif // _VTK_WRITER_H_

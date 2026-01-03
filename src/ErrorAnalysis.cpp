@@ -1,54 +1,58 @@
+// ====================================================================================
+//                                ERROR_ANALYSIS.CPP
+// ====================================================================================
+// Implémentation du calcul d'erreur.
+// ====================================================================================
+
 #include "ErrorAnalysis.h"
 #include <cmath>
 #include <iostream>
-#include <algorithm>
 
-using namespace std;
-using namespace Eigen;
-
-ErrorAnalysis::ErrorAnalysis(DataFile* df, MACgrid* grid) : _df(df), _grid(grid) {}
-
-ErrorAnalysis::~ErrorAnalysis() {}
+ErrorAnalysis::ErrorAnalysis(DataFile* df, MACgrid* grid) 
+    : _df(df), _grid(grid) 
+{}
 
 double ErrorAnalysis::ComputePoiseuilleErrorL2() {
-    double error_L2 = 0.0;
+    double error_L2_sq = 0.0;
     
-    // Récupération géométrie
+    // Géométrie
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
     double hx = _df->Get_hx();
     double hy = _df->Get_hy();
     double ymin = _df->Get_ymin();
     double ymax = _df->Get_ymax();
-    double H = ymax - ymin; // Hauteur du canal
+    double H = ymax - ymin;
 
-    // Paramètres de l'écoulement (suppose U_max = 1.0 ou défini par BC left)
-    // Pour un Poiseuille standard avec BC gauche = 1.0 (profil parabolique max)
-    double U_max = _df->Get_BC_Left_dir();
-    const VectorXd& U = _grid->GetU();
+    // Paramètre analytique
+    double U_max = _df->Get_BC_Left_dir(); // Vitesse max au centre
+    const Eigen::VectorXd& U = _grid->GetU();
 
-    // On parcourt la grille fluide
+    // Parcours du domaine Fluide
+    // On ignore les ghost cells (i=0..Ny-1, j=1..Nx-1 pour U interne)
+    // Mais pour l'erreur globale, on peut sommer sur tout le domaine interne.
     for (int i = 0; i < Ny; ++i) {
-        for (int j = 0; j <= Nx; ++j) { // <--- MODIFICATION ICI (<= Nx)
-            // Ignorer les obstacles solides
+        for (int j = 0; j <= Nx; ++j) { // U est défini sur les faces verticales
+            
+            // Si c'est un solide (obstacle), on ne compte pas l'erreur
             if (_grid->IsSolidU(i, j)) continue;
 
-            // Coordonnée Y au centre de la face U
-            // Rappel : U est décalé en X mais centré en Y par rapport à la maille
-            double y = ymin + (i + 0.5) * hy; 
+            // Coordonnée Y du centre de la face U
+            // U(i,j) est en x = xmin + j*hx, y = ymin + (i+0.5)*hy
+            double y = ymin + (i + 0.5) * hy;
 
-            // Solution Exacte Poiseuille : U(y) = 4 * Umax * Y_adim * (1 - Y_adim)
-            // Y_adim varie de 0 à 1
+            // Solution Exacte (Parabole)
             double Y_adim = (y - ymin) / H;
             double u_exact = 4.0 * U_max * Y_adim * (1.0 - Y_adim);
 
-            // Valeur Numérique
+            // Solution Numérique
             double u_num = U(_grid->GetUIndex(i, j));
 
-            // Somme quadratique pondérée par le volume (surface en 2D)
-            error_L2 += pow(u_num - u_exact, 2) * hx * hy;
+            // Accumulation quadratique (Intégrale ~ Somme * surface)
+            double diff = u_num - u_exact;
+            error_L2_sq += diff * diff * (hx * hy);
         }
     }
 
-    return sqrt(error_L2);
+    return std::sqrt(error_L2_sq);
 }

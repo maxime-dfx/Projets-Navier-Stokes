@@ -1,33 +1,55 @@
+// ====================================================================================
+//                                  TIME_SCHEME.CPP
+// ====================================================================================
+// Implémentation des schémas temporels (Euler, RK2, RK4).
+// Logique : Mise à jour de la grille et des BCs aux étapes intermédiaires.
+// Projection unique à la fin du pas de temps.
+// ====================================================================================
+
 #include "TimeScheme.h"
-#include "Function.h" 
+#include "DataFile.h"
+#include "Laplacian.h"
+#include "MACgrid.h"
+#include "Function.h"
+
 #include <iostream>
 #include <fstream>
 #include <sstream>
 #include <algorithm> 
 #include <locale>
+#include <cmath>
 
 using namespace Eigen;
 using namespace std;
+
+// Helper: Schéma Upwind
+inline double Upwind(double vel, double val_minus, double val_center, double val_plus, double inv_h) {
+    if (vel > 0) return vel * (val_center - val_minus) * inv_h;
+    else return vel * (val_plus - val_center) * inv_h;
+}
 
 // =========================================================================
 // CONSTRUCTEURS
 // =========================================================================
 
-TimeScheme::TimeScheme(DataFile* data_file, Laplacian* lap, MACgrid* grid) :
-    _df(data_file), _lap(lap), _grid(grid), _t(data_file->Get_t0())
+// Constructeur Mère
+TimeScheme::TimeScheme(DataFile* df, Laplacian* lap, MACgrid* grid) 
+    : _df(df), _lap(lap), _grid(grid), _t(df->Get_t0())
 {
     long size_u = _grid->GetU().size();
     long size_v = _grid->GetV().size();
-    _du.resize(size_u);
-    _dv.resize(size_v);
+    _du.resize(size_u); _dv.resize(size_v);
+    _du.setZero();      _dv.setZero();
 }
-TimeScheme::~TimeScheme() {}
 
-EulerScheme::EulerScheme(DataFile* data_file, Laplacian* lap, MACgrid* grid) :
-    TimeScheme(data_file, lap, grid) {}
+// Constructeur Euler
+EulerScheme::EulerScheme(DataFile* df, Laplacian* lap, MACgrid* grid) 
+    : TimeScheme(df, lap, grid) 
+{}
 
-RungeKutta2Scheme::RungeKutta2Scheme(DataFile* data_file, Laplacian* lap, MACgrid* grid) :
-    TimeScheme(data_file, lap, grid) 
+// Constructeur RK2
+RungeKutta2Scheme::RungeKutta2Scheme(DataFile* df, Laplacian* lap, MACgrid* grid) 
+    : TimeScheme(df, lap, grid) 
 {
     long size_u = _grid->GetU().size();
     long size_v = _grid->GetV().size();
@@ -35,8 +57,9 @@ RungeKutta2Scheme::RungeKutta2Scheme(DataFile* data_file, Laplacian* lap, MACgri
     _u_tmp.resize(size_u); _v_tmp.resize(size_v);
 }
 
-RungeKutta4Scheme::RungeKutta4Scheme(DataFile* data_file, Laplacian* lap, MACgrid* grid) :
-    TimeScheme(data_file, lap, grid) 
+// Constructeur RK4
+RungeKutta4Scheme::RungeKutta4Scheme(DataFile* df, Laplacian* lap, MACgrid* grid) 
+    : TimeScheme(df, lap, grid) 
 {
     long size_u = _grid->GetU().size();
     long size_v = _grid->GetV().size();
@@ -47,15 +70,9 @@ RungeKutta4Scheme::RungeKutta4Scheme(DataFile* data_file, Laplacian* lap, MACgri
     _u_tmp.resize(size_u); _v_tmp.resize(size_v);
 }
 
-
 // =========================================================================
 // OUTILS & BC
 // =========================================================================
-
-inline double Upwind(double vel, double val_minus, double val_center, double val_plus, double inv_h) {
-    if (vel > 0) return vel * (val_center - val_minus) * inv_h;
-    else return vel * (val_plus - val_center) * inv_h;
-}
 
 void TimeScheme::ApplyBoundaryConditions()
 {
@@ -93,7 +110,7 @@ void TimeScheme::ApplyBoundaryConditions()
 }
 
 // =========================================================================
-// COMPUTE TENDENCY (Inchangé)
+// COMPUTE TENDENCY
 // =========================================================================
 void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, VectorXd& du, VectorXd& dv)
 {
@@ -136,10 +153,10 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
             double adv_x = Upwind(u_curr, u_W, u_curr, u_E, odx);
 
             double v_avg = 0.25 * (
-                (i < Ny ? v_in(_grid->GetVIndex(i + 1, j)) : 0.0) +     
+                (i < Ny ? v_in(_grid->GetVIndex(i + 1, j)) : 0.0) +      
                 (i < Ny ? v_in(_grid->GetVIndex(i + 1, j - 1)) : 0.0) + 
                 v_in(_grid->GetVIndex(i, j)) +                          
-                v_in(_grid->GetVIndex(i, j - 1))                        
+                v_in(_grid->GetVIndex(i, j - 1))                         
             );
             double adv_y = Upwind(v_avg, u_S, u_curr, u_N, ody);
 
@@ -175,10 +192,10 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
             double adv_y = Upwind(v_curr, v_S, v_curr, v_N, ody);
             
             double u_avg = 0.25 * (
-                (j < Nx ? u_in(_grid->GetUIndex(i, j + 1)) : 0.0) +     
+                (j < Nx ? u_in(_grid->GetUIndex(i, j + 1)) : 0.0) +      
                 u_in(_grid->GetUIndex(i, j)) +                          
                 (j < Nx ? u_in(_grid->GetUIndex(i - 1, j + 1)) : 0.0) + 
-                u_in(_grid->GetUIndex(i - 1, j))                        
+                u_in(_grid->GetUIndex(i - 1, j))                         
             );
             double adv_x = Upwind(u_avg, v_W, v_curr, v_E, odx);
 
@@ -194,7 +211,6 @@ void EulerScheme::Advance()
 {
     ApplyBoundaryConditions(); 
 
-    // Pour Euler, pas besoin de copie car on ne fait qu'une étape
     const VectorXd& u_n = _grid->GetU();
     const VectorXd& v_n = _grid->GetV();
 
@@ -204,7 +220,6 @@ void EulerScheme::Advance()
     VectorXd u_star = u_n + dt * _du;
     VectorXd v_star = v_n + dt * _dv;
 
-    // --- PROJECTION ---
     double rho = _df->Get_rho();
     VectorXd div = _lap->ComputeDivergence(u_star, v_star);
     VectorXd rhs = (rho / dt) * div;
@@ -226,45 +241,31 @@ void EulerScheme::Advance()
 }
 
 // =========================================================================
-// 2. RUNGE-KUTTA 2 (CORRIGÉ)
+// 2. RUNGE-KUTTA 2
 // =========================================================================
 void RungeKutta2Scheme::Advance()
 {
     double dt = _df->Get_dt();
-    
-    // 1. SAUVEGARDE DE L'ETAT INITIAL (CRUCIAL !)
-    // On copie les vecteurs car _grid->SetU va écraser la mémoire de la grille
     VectorXd u_old = _grid->GetU();
     VectorXd v_old = _grid->GetV();
     
-    ApplyBoundaryConditions(); // Applique BC sur u_old/v_old implicitement car grille pas encore modifiée
+    ApplyBoundaryConditions(); 
 
-    // --- K1 ---
-    // Calcul de k1 à partir de l'état initial
+    // K1
     ComputeTendency(u_old, v_old, _k1_u, _k1_v);
 
-    // --- K2 (Point milieu) ---
-    // u_tmp = u_old + 0.5 * dt * k1
-    // ATTENTION : On utilise bien u_old ici !
+    // K2 (Point milieu)
     _u_tmp = u_old + 0.5 * dt * _k1_u;
     _v_tmp = v_old + 0.5 * dt * _k1_v;
-    
-    // Mise à jour grille pour appliquer BC sur l'état intermédiaire
-    _grid->SetU(_u_tmp); 
-    _grid->SetV(_v_tmp);
+    _grid->SetU(_u_tmp); _grid->SetV(_v_tmp);
     ApplyBoundaryConditions(); 
-    
-    // Calcul de k2 à partir de l'état intermédiaire
-    // _du sert de buffer pour k2
-    ComputeTendency(_grid->GetU(), _grid->GetV(), _du, _dv);
+    ComputeTendency(_grid->GetU(), _grid->GetV(), _du, _dv); // _du sert de k2
 
-    // --- PREDICTION FINALE ---
-    // u* = u_old + dt * k2
-    // ATTENTION : On réutilise u_old (l'état initial), pas la grille modifiée !
+    // Prediction
     VectorXd u_star = u_old + dt * _du;
     VectorXd v_star = v_old + dt * _dv;
 
-    // --- PROJECTION ---
+    // Projection
     double rho = _df->Get_rho();
     VectorXd div = _lap->ComputeDivergence(u_star, v_star);
     VectorXd rhs = (rho / dt) * div;
@@ -286,52 +287,42 @@ void RungeKutta2Scheme::Advance()
 }
 
 // =========================================================================
-// 3. RUNGE-KUTTA 4 (CORRIGÉ)
+// 3. RUNGE-KUTTA 4
 // =========================================================================
 void RungeKutta4Scheme::Advance()
 {
     double dt = _df->Get_dt();
-    
-    // 1. SAUVEGARDE DE L'ETAT INITIAL
     VectorXd u_old = _grid->GetU();
     VectorXd v_old = _grid->GetV();
 
     ApplyBoundaryConditions(); 
 
-    // --- K1 ---
+    // K1
     ComputeTendency(u_old, v_old, _k1_u, _k1_v);
 
-    // --- K2 ---
-    // u_tmp = u_old + 0.5 * dt * k1
+    // K2
     _u_tmp = u_old + 0.5 * dt * _k1_u;
     _v_tmp = v_old + 0.5 * dt * _k1_v;
     _grid->SetU(_u_tmp); _grid->SetV(_v_tmp); ApplyBoundaryConditions();
-    
     ComputeTendency(_grid->GetU(), _grid->GetV(), _k2_u, _k2_v);
 
-    // --- K3 ---
-    // u_tmp = u_old + 0.5 * dt * k2
+    // K3
     _u_tmp = u_old + 0.5 * dt * _k2_u;
     _v_tmp = v_old + 0.5 * dt * _k2_v;
     _grid->SetU(_u_tmp); _grid->SetV(_v_tmp); ApplyBoundaryConditions();
-
     ComputeTendency(_grid->GetU(), _grid->GetV(), _k3_u, _k3_v);
 
-    // --- K4 ---
-    // u_tmp = u_old + dt * k3
+    // K4
     _u_tmp = u_old + dt * _k3_u;
     _v_tmp = v_old + dt * _k3_v;
     _grid->SetU(_u_tmp); _grid->SetV(_v_tmp); ApplyBoundaryConditions();
-
     ComputeTendency(_grid->GetU(), _grid->GetV(), _k4_u, _k4_v);
 
-    // --- COMBINAISON RK4 ---
-    // u* = u_old + dt/6 * (k1 + 2k2 + 2k3 + k4)
-    // Ici aussi, on part de u_old !
+    // Combinaison RK4
     VectorXd u_star = u_old + (dt / 6.0) * (_k1_u + 2.0*_k2_u + 2.0*_k3_u + _k4_u);
     VectorXd v_star = v_old + (dt / 6.0) * (_k1_v + 2.0*_k2_v + 2.0*_k3_v + _k4_v);
 
-    // --- PROJECTION ---
+    // Projection
     double rho = _df->Get_rho();
     VectorXd div = _lap->ComputeDivergence(u_star, v_star);
     VectorXd rhs = (rho / dt) * div;
@@ -352,8 +343,10 @@ void RungeKutta4Scheme::Advance()
     _t += dt;
 }
 
+// =========================================================================
+// SAUVEGARDE MANUELLE
+// =========================================================================
 void TimeScheme::SaveSolution(int n_iteration) {
-    // ... (Reste inchangé)
     stringstream ss_dat;
     string resultsPath = _df->Get_results();
     ss_dat << resultsPath << "/sol_" << n_iteration << ".dat";
@@ -377,9 +370,12 @@ void TimeScheme::SaveSolution(int n_iteration) {
                 double p_val = P(_grid->GetPIndex(i, j));
                 double u_val = get_u(i, j);
                 double v_val = get_v(i, j);
+                
+                // Calcul Vorticité
                 double dv_dx = (j<Nx-1 && j>0) ? (get_v(i,j+1)-get_v(i,j-1))/(2*hx) : 0; 
                 double du_dy = (i<Ny-1 && i>0) ? (get_u(i+1,j)-get_u(i-1,j))/(2*hy) : 0;
                 double omega = dv_dx - du_dy;
+
                 dat << x << " " << y << " " << p_val << " " << u_val << " " << v_val << " " << omega << "\n";
             }
             dat << "\n";

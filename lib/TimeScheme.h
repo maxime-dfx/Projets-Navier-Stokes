@@ -1,77 +1,89 @@
+// ====================================================================================
+//                                  TIME_SCHEME.H
+// ====================================================================================
+// Description : Classe abstraite et dérivées pour l'intégration temporelle.
+//               Gère Euler, RK2 et RK4.
+//               Contient la physique (Advection + Diffusion) dans ComputeTendency.
+// ====================================================================================
+
 #ifndef _TIME_SCHEME_H_
 #define _TIME_SCHEME_H_
 
-#include "DataFile.h"
-#include "Laplacian.h"
-#include "MACgrid.h"
-#include <string>
+#include <Eigen/Dense>
 #include <vector>
 
-class TimeScheme
-{
+// Forward declarations
+class DataFile;
+class Laplacian;
+class MACgrid;
+
+// Classe de base abstraite
+class TimeScheme {
 protected:
     DataFile* _df;
     Laplacian* _lap;
     MACgrid* _grid;
     double _t;
-    
-    // [OPTIMISATION] Buffers pré-alloués pour les calculs intermédiaires
-    // Utilisés par ComputeTendency et les schémas
-    Eigen::VectorXd _du; 
+
+    // Buffers pour stocker les tendances (du/dt, dv/dt)
+    Eigen::VectorXd _du;
     Eigen::VectorXd _dv;
 
-    // Applique les conditions Dirichlet/Neumann aux frontières sur la grille actuelle
+    // --- Méthodes Internes (Protected) ---
     void ApplyBoundaryConditions();
-
-    // Calcule les variations (Diffusion - Advection)
     void ComputeTendency(const Eigen::VectorXd& u_in, const Eigen::VectorXd& v_in, 
-                         Eigen::VectorXd& du, Eigen::VectorXd& dv);
+                         Eigen::VectorXd& du_out, Eigen::VectorXd& dv_out);
 
 public:
-    TimeScheme(DataFile* data_file, Laplacian* lap, MACgrid* grid);
-    virtual ~TimeScheme();
-    
+    // Constructeur de base
+    TimeScheme(DataFile* df, Laplacian* lap, MACgrid* grid);
+    virtual ~TimeScheme() = default;
+
+    // Fait avancer la simulation de t à t + dt
     virtual void Advance() = 0;
-    
-    double GetTime() const { return _t; }
+
+    // Sauvegarde manuelle (.dat)
     void SaveSolution(int n_iteration);
+
+    double GetTime() const { return _t; }
 };
 
-// Euler Explicite (Ordre 1)
-class EulerScheme : public TimeScheme
-{
+// ============================================================================
+// EULER EXPLICITE
+// ============================================================================
+class EulerScheme : public TimeScheme {
 public:
-    EulerScheme(DataFile* data_file, Laplacian* lap, MACgrid* grid);
+    // Déclaration explicite du constructeur pour matcher le .cpp
+    EulerScheme(DataFile* df, Laplacian* lap, MACgrid* grid);
     void Advance() override;
 };
 
-// Runge-Kutta 2 (Ordre 2 - Point milieu)
-class RungeKutta2Scheme : public TimeScheme
-{
+// ============================================================================
+// RUNGE-KUTTA 2
+// ============================================================================
+class RungeKutta2Scheme : public TimeScheme {
 private:
-    // Buffers spécifiques RK2
     Eigen::VectorXd _k1_u, _k1_v;
-    Eigen::VectorXd _u_tmp, _v_tmp; 
-
+    Eigen::VectorXd _u_tmp, _v_tmp;
 public:
-    RungeKutta2Scheme(DataFile* data_file, Laplacian* lap, MACgrid* grid);
+    RungeKutta2Scheme(DataFile* df, Laplacian* lap, MACgrid* grid);
     void Advance() override;
 };
 
-// Runge-Kutta 4 (Ordre 4 - Standard)
-class RungeKutta4Scheme : public TimeScheme
-{
+// ============================================================================
+// RUNGE-KUTTA 4
+// ============================================================================
+class RungeKutta4Scheme : public TimeScheme {
 private:
-    // Buffers spécifiques RK4
     Eigen::VectorXd _k1_u, _k1_v;
     Eigen::VectorXd _k2_u, _k2_v;
     Eigen::VectorXd _k3_u, _k3_v;
     Eigen::VectorXd _k4_u, _k4_v;
     Eigen::VectorXd _u_tmp, _v_tmp;
-
 public:
-    RungeKutta4Scheme(DataFile* data_file, Laplacian* lap, MACgrid* grid);
+    RungeKutta4Scheme(DataFile* df, Laplacian* lap, MACgrid* grid);
     void Advance() override;
 };
 
-#endif
+#endif // _TIME_SCHEME_H_
+

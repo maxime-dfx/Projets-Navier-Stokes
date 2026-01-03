@@ -5,33 +5,38 @@
 CXX = g++
 
 # --- DOSSIERS ---
-SRC_DIR = src
-LIB_DIR = lib
+SRC_DIR   = src
+LIB_DIR   = lib
 BUILD_DIR = build
-BIN_DIR = bin
-DATA_DIR = results
+BIN_DIR   = bin
+DATA_DIR  = results
 
 # --- FICHIERS ---
 EXEC = $(BIN_DIR)/ns_solver_2d
 SRCS = $(wildcard $(SRC_DIR)/*.cpp)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
-# --- CONFIGURATION ---
-# Ajuste ces chemins selon ton environnement
+# --- CONFIGURATION BIBLIOTHEQUES ---
 EIGEN_INCLUDE = ${HOME}/libraries/eigen/
 TOML_INCLUDE  = ${HOME}/libraries/
+INCLUDES      = -I$(LIB_DIR) -I$(EIGEN_INCLUDE) -I$(TOML_INCLUDE)
 
-# Options de compilation :
-# -std=c++17 : Standard moderne requis
-# -O3 : Optimisation maximale (mieux que -O2 pour la CFD)
-# -march=native : Optimise pour ton processeur spécifique
-CXXFLAGS = -std=c++17 -O3 -march=native -Wall -I$(LIB_DIR) -I$(EIGEN_INCLUDE) -I$(TOML_INCLUDE)
+# --- FLAGS DE COMPILATION ---
+# -std=c++17    : Requis pour std::filesystem et std::make_unique
+# -O3           : Optimisation maximale
+# -march=native : Optimise pour ton CPU (AVX, etc.)
+# -Wall -Wextra : Avertissements complets
+CXXFLAGS = -std=c++17 -O3 -march=native -Wall -Wextra $(INCLUDES)
+
+# --- FLAGS D'ÉDITION DE LIENS ---
+# -lstdc++fs : Nécessaire sur GCC < 9 pour std::filesystem
+LDFLAGS = -lstdc++fs
 
 # ==============================================================================
 # RÈGLES GÉNÉRALES
 # ==============================================================================
 
-.PHONY: all clean clean_all help mkdirs poiseuille stokes karman turbulent check
+.PHONY: all clean clean_all help mkdirs poiseuille stokes karman turbulent validation
 
 all: $(EXEC)
 
@@ -41,19 +46,19 @@ help:
 	@echo "  make karman      : Lance le cas Von Karman"
 	@echo "  make stokes      : Lance le cas Stokes"
 	@echo "  make turbulent   : Lance le cas Turbulent"
-	@echo "  make check       : Lance l'étude de convergence Python"
+	@echo "  make validation  : Lance l'étude de convergence"
 	@echo "----------------------------------"
-	@echo "  make clean       : Nettoie les objets"
+	@echo "  make clean       : Nettoie les objets (.o)"
 	@echo "  make clean_all   : Nettoie tout (exécutable + résultats)"
 
 # Édition des liens
 $(EXEC): $(OBJS) | mkdirs
-	@echo "Liaison de l'exécutable..."
-	$(CXX) $(CXXFLAGS) $^ -o $@
+	@echo ">> [LINK] Liaison de l'exécutable..."
+	$(CXX) $(CXXFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Compilation des sources
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp | mkdirs
-	@echo "Compilation de $<..."
+	@echo ">> [CXX]  Compilation de $<..."
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 mkdirs:
@@ -79,21 +84,30 @@ turbulent: $(EXEC)
 	@echo ">>> Lancement Simulation : Turbulent"
 	./$(EXEC) input/turbulent.toml
 
+validation: $(EXEC)
+	@echo ">>> Lancement Validation : Poisseuille"
+	./$(EXEC) input/convergence.toml
+
 # ==============================================================================
 # OUTILS & NETTOYAGE
 # ==============================================================================
 
-# Lance l'étude de convergence (Python + Matplotlib)
-check: $(EXEC)
-	@echo ">>> Lancement Étude de Convergence..."
-	./$(EXEC) input/poiseuille.toml check
-	gnuplot résultats/validation.gp
-
+plots:
+	@echo ">>> Génération des graphiques Gnuplot..."
+	@mkdir -p Résultats/Gnuplot
+	@for file in Résultats/Gnuplot/*.gp; do \
+		if [ -f "$$file" ]; then \
+			echo "   >> Exécution de $$file"; \
+			gnuplot "$$file"; \
+		else \
+			echo "   >> Aucun fichier .gp trouvé dans Résultats/Gnuplot"; \
+		fi; \
+	done
+	
 clean:
-	rm -rf $(BUILD_DIR) $(BIN_DIR)
+	@echo ">> Nettoyage des objets..."
+	rm -rf $(BUILD_DIR)
 
 clean_all: clean
-	rm -rf $(DATA_DIR) *.png *.dat
-
-clean_data: 
-	rm -rf $(DATA_DIR) 
+	@echo ">> Nettoyage complet..."
+	rm -rf $(BIN_DIR) $(DATA_DIR) *.png *.dat

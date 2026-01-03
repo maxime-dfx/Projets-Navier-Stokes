@@ -1,46 +1,60 @@
-#ifndef _LAPLACIAN_H
-#define _LAPLACIAN_H
+// ====================================================================================
+//                                 LAPLACIAN.H
+// ====================================================================================
+// Description : Résolution de l'équation de Poisson pour la pression.
+//               Div(Grad P) = RHS
+//               Gère la matrice creuse et le solveur direct Cholesky.
+// ====================================================================================
 
-#include <Eigen/Dense>
+#ifndef _LAPLACIAN_H_
+#define _LAPLACIAN_H_
+
 #include <Eigen/Sparse>
-#include "Function.h"
-#include "MACgrid.h"
+#include <Eigen/Dense>
 
-/**
- * @brief Classe gérant la résolution de l'équation de Poisson pour la pression.
- * Discrétisation par Différences Finies sur grille MAC décalée.
- */
-class Laplacian
-{
+// Forward declarations pour limiter les dépendances dans le header
+class Function;
+class DataFile;
+class MACgrid;
+
+class Laplacian {
 private:
     Function* _fct;
     DataFile* _df;
     MACgrid* _grid;
-    
-    // Matrice du Laplacien (Sparse)
-    Eigen::SparseMatrix<double> _H; 
-    
-    // Solveur direct Cholesky (rapide pour matrices symétriques définies positives)
+
+    // Matrice du Laplacien (Stockée pour éviter la reconstruction à chaque pas)
+    Eigen::SparseMatrix<double> _H;
+
+    // Solveur direct optimisé pour matrices Symétriques Définies Positives (SPD)
+    // SimplicialLLT est plus rapide que LU pour ce type de problème
     Eigen::SimplicialLLT<Eigen::SparseMatrix<double>> _solver;
 
 public:
-    // Constructeur : Prend le pointeur de grille par valeur (Correction appliquée)
-    Laplacian(Function* function, DataFile* data_file, MACgrid* grid);
+    // ============================================================================
+    // CONSTRUCTEUR & DESTRUCTEUR
+    // ============================================================================
+    Laplacian(Function* fct, DataFile* df, MACgrid* grid);
+    ~Laplacian() = default;
 
-    // Construit la matrice du Laplacien avec les CL de Neumann
+    // ============================================================================
+    // MÉTHODES PRINCIPALES
+    // ============================================================================
+    
+    // Construit la matrice du Laplacien (Stencil à 5 points)
+    // Applique les CL de Neumann et gère la singularité via pénalisation.
     void BuildMatrix();
 
-    // Calcule la divergence du champ de vitesse (div u)
+    // Calcule la divergence du champ de vitesse intermédiaire (u*, v*)
+    // C'est le second membre de l'équation de Poisson (RHS)
     Eigen::VectorXd ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V);
 
     // Résout le système linéaire H * P = RHS
+    // Applique la correction de compatibilité (Condition de Fredholm)
     void Solve(const Eigen::VectorXd& rhs, Eigen::VectorXd& p_sol);
 
-    // Calcule le gradient de pression pour la correction de vitesse
+    // Calcule le gradient de pression pour l'étape de correction
     void ComputeGradient(const Eigen::VectorXd& p, Eigen::VectorXd& gradPx, Eigen::VectorXd& gradPy);
-    
-    // Accesseur (pour debug ou validation)
-    const Eigen::SparseMatrix<double>& Get_H() const { return _H; }
 };
 
-#endif
+#endif // _LAPLACIAN_H_
