@@ -47,8 +47,8 @@ public:
 
     // Calcule la divergence du champ de vitesse intermédiaire (u*, v*)
     // C'est le second membre de l'équation de Poisson (RHS)
-    Eigen::VectorXd ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V);
-
+    void ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V, Eigen::VectorXd& div_out);
+        
     // Résout le système linéaire H * P = RHS
     // Applique la correction de compatibilité (Condition de Fredholm)
     void Solve(const Eigen::VectorXd& rhs, Eigen::VectorXd& p_sol);

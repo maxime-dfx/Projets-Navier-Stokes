@@ -17,8 +17,11 @@ SRCS = $(wildcard $(SRC_DIR)/*.cpp)
 OBJS = $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(SRCS))
 
 # --- CONFIGURATION BIBLIOTHEQUES ---
-EIGEN_INCLUDE = ${HOME}/libraries/eigen/
-TOML_INCLUDE  = ${HOME}/libraries/
+# Assurez-vous que le dossier 'eigen' contient bien le sous-dossier 'Eigen'
+# ou les headers directement.
+EIGEN_INCLUDE = ${HOME}/librairies/eigen/
+TOML_INCLUDE  = ${HOME}/librairies/toml11/include/
+
 INCLUDES      = -I$(LIB_DIR) -I$(EIGEN_INCLUDE) -I$(TOML_INCLUDE)
 
 # --- FLAGS DE COMPILATION ---
@@ -73,7 +76,7 @@ poiseuille: $(EXEC)
 	./$(EXEC) input/poiseuille.toml
 
 stokes: $(EXEC)
-	@echo ">>> Lancement Simulation : Stokes"
+	@echo ">>> Lancement Simulation : St	okes"
 	./$(EXEC) input/stokes.toml
 
 karman: $(EXEC)

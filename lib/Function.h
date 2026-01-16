@@ -32,18 +32,22 @@ public:
 
     // --- Valeurs aux Bords (Composantes Normales) ---
     // Utilisé pour la pénétration (U gauche/droite, V haut/bas)
-    double GetLeftU_Normal(double y)   const; // Peut être complexe (Poiseuille)
-    double GetRightU_Normal(double y)  const { return _df->Get_BC_Right_dir(); }
-    double GetBottomV_Normal(double x) const { return _df->Get_BC_Bottom_dir(); }
-    double GetTopV_Normal(double x)    const { return _df->Get_BC_Top_dir(); }
+    
+    // Celui-ci est implémenté dans le .cpp (car il peut être complexe), on garde le nom 'y'
+    double GetLeftU_Normal(double y)   const; 
+
+    // Pour ceux-ci, on commente l'argument pour éviter le warning "unused parameter"
+    double GetRightU_Normal(double /*y*/)  const { return _df->Get_BC_Right_dir(); }
+    double GetBottomV_Normal(double /*x*/) const { return _df->Get_BC_Bottom_dir(); }
+    double GetTopV_Normal(double /*x*/)    const { return _df->Get_BC_Top_dir(); }
 
     // --- Valeurs aux Bords (Composantes Tangentielles) ---
     // Utilisé pour le cisaillement (V gauche/droite, U haut/bas)
-    // Ici on suppose souvent 0 (pas de glissement ou paroi mobile simple)
-    double GetLeftV_Tangent(double y)   const { return 0.0; }
-    double GetRightV_Tangent(double y)  const { return 0.0; }
-    double GetBottomU_Tangent(double x) const { return _df->Get_BC_Bottom_dir(); } // Ex: Cavité entraînée
-    double GetTopU_Tangent(double x)    const { return _df->Get_BC_Top_dir(); }
+    
+    double GetLeftV_Tangent(double /*y*/)   const { return 0.0; }
+    double GetRightV_Tangent(double /*y*/)  const { return 0.0; }
+    double GetBottomU_Tangent(double /*x*/) const { return _df->Get_BC_Bottom_dir(); } // Ex: Cavité entraînée
+    double GetTopU_Tangent(double /*x*/)    const { return _df->Get_BC_Top_dir(); }
 };
 
 #endif // _FUNCTION_H_

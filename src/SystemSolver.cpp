@@ -2,7 +2,11 @@
 //                                  SYSTEM_SOLVER.CPP
 // ====================================================================================
 // Implémentation de la boucle principale.
-// Ajout de la sonde (Probe) pour le calcul de Strouhal.
+// Intègre :
+//  - Initialisation des objets (Grille, Laplacien, Schéma Temporel)
+//  - Boucle en temps
+//  - Sécurité CFL (Arrêt d'urgence si instabilité)
+//  - Sorties VTK (avec barre de progression) et Sonde ponctuelle
 // ====================================================================================
 
 #include "SystemSolver.h"
@@ -18,6 +22,7 @@
 #include <memory>
 #include <algorithm>
 #include <cmath>
+#include <iomanip> // Pour std::setw
 
 double SystemSolver::Run(DataFile* df, bool write_vtk) 
 {
@@ -101,7 +106,7 @@ double SystemSolver::Run(DataFile* df, bool write_vtk)
     double dt = df->Get_dt();
     int iter = 0;
 
-    // Fréquence de sauvegarde VTK (on vise ~50-100 frames total pour la vidéo)
+    // Fréquence de sauvegarde VTK (on vise ~100 frames total pour la vidéo)
     int total_steps = static_cast<int>((t_end - t) / dt);
     int save_freq = std::max(1, total_steps / 100);
 
@@ -116,18 +121,55 @@ double SystemSolver::Run(DataFile* df, bool write_vtk)
         t = time_scheme->GetTime();
         iter++;
 
-        // --- Sortie Sonde (Haute fréquence : chaque pas de temps) ---
+        // ====================================================================
+        // CHECK CFL & NAN (Sécurité)
+        // ====================================================================
+        // Vérification périodique pour ne pas ralentir le calcul
+        if (iter % 10 == 0) {
+            double max_U = grid->GetU().cwiseAbs().maxCoeff();
+            double max_V = grid->GetV().cwiseAbs().maxCoeff();
+            double h_min = std::min(df->Get_hx(), df->Get_hy());
+            
+            // Calcul de la CFL courante : (V_max * dt) / h
+            double current_cfl = std::max(max_U, max_V) * dt / h_min;
+
+            if (current_cfl > 1.5) { // Marge tolérante à 1.5 (Upwind est stable mais faut pas exagérer)
+                std::cerr << "\n\n[!!! ALERTE !!!] EXPLOSION CFL DETECTEE" << std::endl;
+                std::cerr << "  -> CFL atteinte : " << current_cfl << " (Max recommandé ~1.0)" << std::endl;
+                std::cerr << "  -> Vitesse Max  : " << std::max(max_U, max_V) << std::endl;
+                std::cerr << "  -> Arrêt d'urgence à t=" << t << std::endl;
+                break; // On sort proprement pour sauvegarder
+            }
+            
+            if (std::isnan(max_U) || std::isinf(max_U)) {
+                 std::cerr << "\n\n[!!! ERREUR !!!] La simulation contient des NaNs (Not A Number)." << std::endl;
+                 break;
+            }
+        }
+
+        // --- Sortie Sonde (Haute fréquence) ---
         if (probe_file.is_open()) {
             double v_val = grid->GetV()(grid->GetVIndex(i_probe, j_probe));
             probe_file << t << " " << v_val << std::endl;
         }
 
-        // --- Sortie VTK (Basse fréquence) ---
+        // --- Sortie VTK & Feedback (Basse fréquence) ---
         if (write_vtk && vtk && (iter % save_freq == 0)) {
             vtk->Write(iter, t);
-            // Petit feedback visuel
-            double progress = 100.0 * t / t_end;
-            std::cout << "\r   Progress: " << int(progress) << "% (t=" << t << ")" << std::flush;
+            
+            // Feedback Console Amélioré (Barre de chargement)
+            double progress = t / t_end;
+            int barWidth = 40;
+            
+            std::cout << "\r   [";
+            int pos = barWidth * progress;
+            for (int i = 0; i < barWidth; ++i) {
+                if (i < pos) std::cout << "=";
+                else if (i == pos) std::cout << ">";
+                else std::cout << " ";
+            }
+            std::cout << "] " << int(progress * 100.0) << " % (t=" 
+                      << std::fixed << std::setprecision(3) << t << "s)" << std::flush;
         }
     }
     std::cout << std::endl << ">> [SystemSolver] Simulation terminee." << std::endl;

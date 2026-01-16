@@ -2,8 +2,11 @@
 //                                  TIME_SCHEME.CPP
 // ====================================================================================
 // Implémentation des schémas temporels (Euler, RK2, RK4).
-// Logique : Mise à jour de la grille et des BCs aux étapes intermédiaires.
-// Projection unique à la fin du pas de temps.
+//
+// AMELIORATIONS APPORTEES :
+// 1. Gestion mémoire optimisée (plus d'allocations dynamiques dans les boucles).
+// 2. Schéma d'advection HYBRIDE (Upwind + Centré) pour moins de diffusion.
+// 3. Calculs de coordonnées optimisés (accès direct sans objets temporaires).
 // ====================================================================================
 
 #include "TimeScheme.h"
@@ -22,14 +25,29 @@
 using namespace Eigen;
 using namespace std;
 
-// Helper: Schéma Upwind
-inline double Upwind(double vel, double val_minus, double val_center, double val_plus, double inv_h) {
-    if (vel > 0) return vel * (val_center - val_minus) * inv_h;
-    else return vel * (val_plus - val_center) * inv_h;
+// =========================================================================
+// HELPER : SCHÉMA D'ADVECTION HYBRIDE
+// =========================================================================
+// Mélange Upwind (Stable mais diffusif) et Centré (Précis mais instable).
+// gamma = 0.0 -> Pur Upwind (Diffusion max, très stable)
+// gamma = 1.0 -> Pur Centré (Diffusion nulle, oscillations possibles)
+// gamma = 0.5 -> Bon compromis (Moins de diffusion, reste stable)
+inline double AdvectionHybrid(double vel, double val_minus, double val_center, double val_plus, double inv_h) {
+    // 1. Contribution Upwind (Ordre 1)
+    double flux_upwind = 0.0;
+    if (vel > 0) flux_upwind = vel * (val_center - val_minus) * inv_h;
+    else         flux_upwind = vel * (val_plus - val_center) * inv_h;
+
+    // 2. Contribution Centrée (Ordre 2)
+    double flux_centered = vel * (val_plus - val_minus) * 0.5 * inv_h;
+
+    // 3. Mélange (Facteur GAMMA)
+    const double GAMMA = 0.5; 
+    return (1.0 - GAMMA) * flux_upwind + GAMMA * flux_centered;
 }
 
 // =========================================================================
-// CONSTRUCTEURS
+// CONSTRUCTEURS (AVEC PRE-ALLOCATION)
 // =========================================================================
 
 // Constructeur Mère
@@ -38,7 +56,21 @@ TimeScheme::TimeScheme(DataFile* df, Laplacian* lap, MACgrid* grid)
 {
     long size_u = _grid->GetU().size();
     long size_v = _grid->GetV().size();
-    _du.resize(size_u); _dv.resize(size_v);
+    long size_p = _grid->GetP().size();
+
+    // Allocation unique des buffers de travail
+    _du.resize(size_u);     _dv.resize(size_v);
+    _u_star.resize(size_u); _v_star.resize(size_v);
+    _u_next.resize(size_u); _v_next.resize(size_v);
+    
+    _p_next.resize(size_p);
+    _div.resize(size_p);
+    _rhs.resize(size_p);
+    
+    _gradPx.resize(size_u);
+    _gradPy.resize(size_v);
+
+    // Initialisation à zéro
     _du.setZero();      _dv.setZero();
 }
 
@@ -81,16 +113,23 @@ void TimeScheme::ApplyBoundaryConditions()
     VectorXd& U = const_cast<VectorXd&>(_grid->GetU()); 
     VectorXd& V = const_cast<VectorXd&>(_grid->GetV());
     Function* fct = _grid->GetFunction();
+    double ymin = _df->Get_ymin();
+    double hy = _df->Get_hy();
+    double xmin = _df->Get_xmin();
+    double hx = _df->Get_hx();
 
     // Murs Verticaux
     for (int i = 0; i < Ny; ++i) {
         int k_left = _grid->GetUIndex(i, 0);
-        double y_left = _grid->GetUcoord(i, 0)(1);
+        // Optimisation coordonnée : calcul direct
+        double y_left = ymin + (i + 0.5) * hy;
+
         if (fct->IsDirichletLeft()) U(k_left) = fct->GetLeftU_Normal(y_left);
         else U(k_left) = U(_grid->GetUIndex(i, 1)); 
 
         int k_right = _grid->GetUIndex(i, Nx);
-        double y_right = _grid->GetUcoord(i, Nx)(1);
+        double y_right = ymin + (i + 0.5) * hy;
+
         if (fct->IsDirichletRight()) U(k_right) = fct->GetRightU_Normal(y_right);
         else U(k_right) = U(_grid->GetUIndex(i, Nx - 1));
     }
@@ -98,19 +137,21 @@ void TimeScheme::ApplyBoundaryConditions()
     // Murs Horizontaux
     for (int j = 0; j < Nx; ++j) {
         int k_bott = _grid->GetVIndex(0, j);
-        double x_bott = _grid->GetVcoord(0, j)(0);
+        double x_bott = xmin + (j + 0.5) * hx;
+
         if (fct->IsDirichletBottom()) V(k_bott) = fct->GetBottomV_Normal(x_bott); 
         else V(k_bott) = V(_grid->GetVIndex(1, j));
 
         int k_top = _grid->GetVIndex(Ny, j);
-        double x_top = _grid->GetVcoord(Ny, j)(0);
+        double x_top = xmin + (j + 0.5) * hx;
+
         if (fct->IsDirichletTop()) V(k_top) = fct->GetTopV_Normal(x_top); 
         else V(k_top) = V(_grid->GetVIndex(Ny - 1, j));
     }
 }
 
 // =========================================================================
-// COMPUTE TENDENCY
+// COMPUTE TENDENCY (C'est ici que la Physique est calculée !)
 // =========================================================================
 void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, VectorXd& du, VectorXd& dv)
 {
@@ -122,6 +163,8 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
     int Nx = _df->Get_Nx(); int Ny = _df->Get_Ny();
     double odx = 1.0 / hx; double ody = 1.0 / hy;
     double odx2 = 1.0 / (hx*hx); double ody2 = 1.0 / (hy*hy);
+    double xmin = _df->Get_xmin();
+    double ymin = _df->Get_ymin();
 
     Function* fct = _grid->GetFunction();
 
@@ -132,7 +175,7 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
 
             int k = _grid->GetUIndex(i, j);
             double u_curr = u_in(k);
-            double x_curr = _grid->GetUcoord(i,j)(0);
+            double x_curr = xmin + j * hx; // Coordonnée U
             
             double u_E = u_in(_grid->GetUIndex(i, j + 1));
             double u_W = u_in(_grid->GetUIndex(i, j - 1));
@@ -150,15 +193,18 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
             }
 
             double diffusion = nu * ((u_E - 2*u_curr + u_W)*odx2 + (u_N - 2*u_curr + u_S)*ody2);
-            double adv_x = Upwind(u_curr, u_W, u_curr, u_E, odx);
+            
+            // Advection X (Hybride)
+            double adv_x = AdvectionHybrid(u_curr, u_W, u_curr, u_E, odx);
 
+            // Advection Y (Hybride)
             double v_avg = 0.25 * (
                 (i < Ny ? v_in(_grid->GetVIndex(i + 1, j)) : 0.0) +      
                 (i < Ny ? v_in(_grid->GetVIndex(i + 1, j - 1)) : 0.0) + 
                 v_in(_grid->GetVIndex(i, j)) +                          
                 v_in(_grid->GetVIndex(i, j - 1))                         
             );
-            double adv_y = Upwind(v_avg, u_S, u_curr, u_N, ody);
+            double adv_y = AdvectionHybrid(v_avg, u_S, u_curr, u_N, ody);
 
             du(k) = diffusion - (adv_x + adv_y);
         }
@@ -171,7 +217,7 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
 
             int k = _grid->GetVIndex(i, j);
             double v_curr = v_in(k);
-            double y_curr = _grid->GetVcoord(i, j)(1);
+            double y_curr = ymin + i * hy; // Coordonnée V
 
             double v_N = v_in(_grid->GetVIndex(i + 1, j));
             double v_S = v_in(_grid->GetVIndex(i - 1, j));
@@ -189,15 +235,18 @@ void TimeScheme::ComputeTendency(const VectorXd& u_in, const VectorXd& v_in, Vec
             }
 
             double diffusion = nu * ((v_E - 2*v_curr + v_W)*odx2 + (v_N - 2*v_curr + v_S)*ody2);
-            double adv_y = Upwind(v_curr, v_S, v_curr, v_N, ody);
             
+            // Advection Y (Hybride)
+            double adv_y = AdvectionHybrid(v_curr, v_S, v_curr, v_N, ody);
+            
+            // Advection X (Hybride)
             double u_avg = 0.25 * (
                 (j < Nx ? u_in(_grid->GetUIndex(i, j + 1)) : 0.0) +      
                 u_in(_grid->GetUIndex(i, j)) +                          
                 (j < Nx ? u_in(_grid->GetUIndex(i - 1, j + 1)) : 0.0) + 
                 u_in(_grid->GetUIndex(i - 1, j))                         
             );
-            double adv_x = Upwind(u_avg, v_W, v_curr, v_E, odx);
+            double adv_x = AdvectionHybrid(u_avg, v_W, v_curr, v_E, odx);
 
             dv(k) = diffusion - (adv_x + adv_y);
         }
@@ -217,26 +266,30 @@ void EulerScheme::Advance()
     ComputeTendency(u_n, v_n, _du, _dv);
 
     double dt = _df->Get_dt();
-    VectorXd u_star = u_n + dt * _du;
-    VectorXd v_star = v_n + dt * _dv;
+    
+    // Optimisation : Utilisation des buffers membres
+    _u_star = u_n + dt * _du;
+    _v_star = v_n + dt * _dv;
 
     double rho = _df->Get_rho();
-    VectorXd div = _lap->ComputeDivergence(u_star, v_star);
-    VectorXd rhs = (rho / dt) * div;
-    VectorXd p_next;
-    _lap->Solve(rhs, p_next);
-    VectorXd gradPx, gradPy;
-    _lap->ComputeGradient(p_next, gradPx, gradPy);
+    
+    // Optimisation : Passage par référence
+    _lap->ComputeDivergence(_u_star, _v_star, _div);
+    
+    _rhs = (rho / dt) * _div;
+    
+    _lap->Solve(_rhs, _p_next);
+    _lap->ComputeGradient(_p_next, _gradPx, _gradPy);
 
-    VectorXd u_next = u_star - (dt / rho) * gradPx;
-    VectorXd v_next = v_star - (dt / rho) * gradPy;
+    _u_next = _u_star - (dt / rho) * _gradPx;
+    _v_next = _v_star - (dt / rho) * _gradPy;
 
     // Pénalisation
     int Nx = _df->Get_Nx(); int Ny = _df->Get_Ny();
-    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) u_next(_grid->GetUIndex(i,j))=0.;
-    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) v_next(_grid->GetVIndex(i,j))=0.;
+    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) _u_next(_grid->GetUIndex(i,j))=0.;
+    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) _v_next(_grid->GetVIndex(i,j))=0.;
 
-    _grid->SetU(u_next); _grid->SetV(v_next); _grid->SetP(p_next);
+    _grid->SetU(_u_next); _grid->SetV(_v_next); _grid->SetP(_p_next);
     _t += dt;
 }
 
@@ -246,8 +299,8 @@ void EulerScheme::Advance()
 void RungeKutta2Scheme::Advance()
 {
     double dt = _df->Get_dt();
-    VectorXd u_old = _grid->GetU();
-    VectorXd v_old = _grid->GetV();
+    const VectorXd& u_old = _grid->GetU();
+    const VectorXd& v_old = _grid->GetV();
     
     ApplyBoundaryConditions(); 
 
@@ -262,27 +315,27 @@ void RungeKutta2Scheme::Advance()
     ComputeTendency(_grid->GetU(), _grid->GetV(), _du, _dv); // _du sert de k2
 
     // Prediction
-    VectorXd u_star = u_old + dt * _du;
-    VectorXd v_star = v_old + dt * _dv;
+    _u_star = u_old + dt * _du;
+    _v_star = v_old + dt * _dv;
 
     // Projection
     double rho = _df->Get_rho();
-    VectorXd div = _lap->ComputeDivergence(u_star, v_star);
-    VectorXd rhs = (rho / dt) * div;
-    VectorXd p_next;
-    _lap->Solve(rhs, p_next);
-    VectorXd gradPx, gradPy;
-    _lap->ComputeGradient(p_next, gradPx, gradPy);
+    _lap->ComputeDivergence(_u_star, _v_star, _div); // Optimisation
+    
+    _rhs = (rho / dt) * _div;
+    
+    _lap->Solve(_rhs, _p_next);
+    _lap->ComputeGradient(_p_next, _gradPx, _gradPy);
 
-    VectorXd u_next = u_star - (dt / rho) * gradPx;
-    VectorXd v_next = v_star - (dt / rho) * gradPy;
+    _u_next = _u_star - (dt / rho) * _gradPx;
+    _v_next = _v_star - (dt / rho) * _gradPy;
 
     // Pénalisation
     int Nx = _df->Get_Nx(); int Ny = _df->Get_Ny();
-    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) u_next(_grid->GetUIndex(i,j))=0.;
-    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) v_next(_grid->GetVIndex(i,j))=0.;
+    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) _u_next(_grid->GetUIndex(i,j))=0.;
+    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) _v_next(_grid->GetVIndex(i,j))=0.;
 
-    _grid->SetU(u_next); _grid->SetV(v_next); _grid->SetP(p_next);
+    _grid->SetU(_u_next); _grid->SetV(_v_next); _grid->SetP(_p_next);
     _t += dt;
 }
 
@@ -292,8 +345,8 @@ void RungeKutta2Scheme::Advance()
 void RungeKutta4Scheme::Advance()
 {
     double dt = _df->Get_dt();
-    VectorXd u_old = _grid->GetU();
-    VectorXd v_old = _grid->GetV();
+    const VectorXd& u_old = _grid->GetU();
+    const VectorXd& v_old = _grid->GetV();
 
     ApplyBoundaryConditions(); 
 
@@ -319,27 +372,27 @@ void RungeKutta4Scheme::Advance()
     ComputeTendency(_grid->GetU(), _grid->GetV(), _k4_u, _k4_v);
 
     // Combinaison RK4
-    VectorXd u_star = u_old + (dt / 6.0) * (_k1_u + 2.0*_k2_u + 2.0*_k3_u + _k4_u);
-    VectorXd v_star = v_old + (dt / 6.0) * (_k1_v + 2.0*_k2_v + 2.0*_k3_v + _k4_v);
+    _u_star = u_old + (dt / 6.0) * (_k1_u + 2.0*_k2_u + 2.0*_k3_u + _k4_u);
+    _v_star = v_old + (dt / 6.0) * (_k1_v + 2.0*_k2_v + 2.0*_k3_v + _k4_v);
 
     // Projection
     double rho = _df->Get_rho();
-    VectorXd div = _lap->ComputeDivergence(u_star, v_star);
-    VectorXd rhs = (rho / dt) * div;
-    VectorXd p_next;
-    _lap->Solve(rhs, p_next);
-    VectorXd gradPx, gradPy;
-    _lap->ComputeGradient(p_next, gradPx, gradPy);
+    _lap->ComputeDivergence(_u_star, _v_star, _div); // Optimisation
+    
+    _rhs = (rho / dt) * _div;
+    
+    _lap->Solve(_rhs, _p_next);
+    _lap->ComputeGradient(_p_next, _gradPx, _gradPy);
 
-    VectorXd u_next = u_star - (dt / rho) * gradPx;
-    VectorXd v_next = v_star - (dt / rho) * gradPy;
+    _u_next = _u_star - (dt / rho) * _gradPx;
+    _v_next = _v_star - (dt / rho) * _gradPy;
 
     // Pénalisation
     int Nx = _df->Get_Nx(); int Ny = _df->Get_Ny();
-    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) u_next(_grid->GetUIndex(i,j))=0.;
-    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) v_next(_grid->GetVIndex(i,j))=0.;
+    for (int i=0; i<Ny; ++i) for (int j=0; j<=Nx; ++j) if (_grid->IsSolidU(i,j)) _u_next(_grid->GetUIndex(i,j))=0.;
+    for (int i=0; i<=Ny; ++i) for (int j=0; j<Nx; ++j) if (_grid->IsSolidV(i,j)) _v_next(_grid->GetVIndex(i,j))=0.;
 
-    _grid->SetU(u_next); _grid->SetV(v_next); _grid->SetP(p_next);
+    _grid->SetU(_u_next); _grid->SetV(_v_next); _grid->SetP(_p_next);
     _t += dt;
 }
 
@@ -356,6 +409,8 @@ void TimeScheme::SaveSolution(int n_iteration) {
         dat.imbue(std::locale("C"));
         int Nx = _df->Get_Nx(); int Ny = _df->Get_Ny();
         double hx = _df->Get_hx(); double hy = _df->Get_hy();
+        double xmin = _df->Get_xmin();
+        double ymin = _df->Get_ymin();
         const VectorXd& P = _grid->GetP();
         const VectorXd& U = _grid->GetU();
         const VectorXd& V = _grid->GetV();
@@ -365,8 +420,8 @@ void TimeScheme::SaveSolution(int n_iteration) {
 
         for (int i = 0; i < Ny; ++i) {
             for (int j = 0; j < Nx; ++j) {
-                double x = _df->Get_xmin() + (j + 0.5) * hx;
-                double y = _df->Get_ymin() + (i + 0.5) * hy;
+                double x = xmin + (j + 0.5) * hx;
+                double y = ymin + (i + 0.5) * hy;
                 double p_val = P(_grid->GetPIndex(i, j));
                 double u_val = get_u(i, j);
                 double v_val = get_v(i, j);

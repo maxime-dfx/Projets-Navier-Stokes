@@ -26,8 +26,18 @@ protected:
     double _t;
 
     // Buffers pour stocker les tendances (du/dt, dv/dt)
-    Eigen::VectorXd _du;
-    Eigen::VectorXd _dv;
+    Eigen::VectorXd _du, _dv;
+
+    // --- Buffers d'optimisation (AJOUTÉS) ---
+    // Etape de prédiction
+    Eigen::VectorXd _u_star, _v_star;
+    
+    // Etape de correction (C'est ceux qui manquaient)
+    Eigen::VectorXd _u_next, _v_next; 
+    
+    // Solveur Pression & Divergence
+    Eigen::VectorXd _p_next, _div, _rhs;
+    Eigen::VectorXd _gradPx, _gradPy;
 
     // --- Méthodes Internes (Protected) ---
     void ApplyBoundaryConditions();

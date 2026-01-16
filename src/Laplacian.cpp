@@ -103,14 +103,19 @@ void Laplacian::BuildMatrix()
 // ============================================================================
 // CALCUL DE LA DIVERGENCE (COMPUTE DIVERGENCE)
 // ============================================================================
-Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V) 
+
+void Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eigen::VectorXd& V, Eigen::VectorXd& div_out) 
 {
     int Nx = _df->Get_Nx();
     int Ny = _df->Get_Ny();
     double inv_hx = 1.0 / _df->Get_hx();
     double inv_hy = 1.0 / _df->Get_hy();
 
-    Eigen::VectorXd div(Nx * Ny);
+    // On s'assure que le vecteur de sortie a la bonne taille (sécurité)
+    // Comme on l'a pré-alloué dans TimeScheme, cela ne coûtera rien (pas de réallocation).
+    if (div_out.size() != Nx * Ny) {
+        div_out.resize(Nx * Ny);
+    }
 
     // Parcours de toutes les cellules de pression
     for (int i = 0; i < Ny; ++i) {
@@ -127,10 +132,10 @@ Eigen::VectorXd Laplacian::ComputeDivergence(const Eigen::VectorXd& U, const Eig
             double du_dx = (U(k_u_E) - U(k_u_W)) * inv_hx;
             double dv_dy = (V(k_v_N) - V(k_v_S)) * inv_hy;
 
-            div(k) = du_dx + dv_dy;
+            // Écriture directe dans le buffer fourni
+            div_out(k) = du_dx + dv_dy;
         }
     }
-    return div;
 }
 
 // ============================================================================
